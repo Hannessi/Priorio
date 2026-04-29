@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Task Prioritizer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; display: flex; justify-content: center; padding: 24px 16px; min-height: 100vh; }
+    #app { width: 100%; max-width: 560px; }
+    h1 { font-size: 1.4rem; color: #fff; }
+    .header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; }
+    .version { font-size: 0.75rem; color: #444; }
+    h2 { font-size: 1rem; color: #aaa; margin-bottom: 20px; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 20px; margin-bottom: 12px; }
+    input[type=text] { width: 100%; padding: 10px 12px; background: #111; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 0.95rem; outline: none; }
+    input[type=text]:focus { border-color: #555; }
+    button { cursor: pointer; border: none; border-radius: 6px; padding: 12px 18px; font-size: 1rem; transition: background 0.15s; min-height: 48px; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-ghost { background: #222; color: #ccc; border: 1px solid #333; }
+    .btn-ghost:hover { background: #2a2a2a; }
+    .row { display: flex; gap: 10px; margin-top: 12px; }
+    .task-list { list-style: none; margin-bottom: 16px; }
+    .task-list li { padding: 8px 12px; background: #111; border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
+    .task-list li span.del { color: #555; cursor: pointer; font-size: 1rem; }
+    .task-list li span.del:hover { color: #e55; }
+    /* Compare */
+    .compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .compare-btn { padding: 24px 14px; font-size: 1rem; background: #111; border: 1px solid #333; border-radius: 8px; color: #e0e0e0; text-align: center; cursor: pointer; transition: background 0.15s, border-color 0.15s; min-height: 80px; }
+    @media (max-width: 400px) {
+      .compare-grid { grid-template-columns: 1fr; }
+      .compare-btn { min-height: 64px; }
+    }
+    .compare-btn:hover { background: #1e3a8a; border-color: #2563eb; }
+    .criterion { font-size: 0.8rem; color: #888; text-align: center; margin-bottom: 8px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .progress { font-size: 0.78rem; color: #555; margin-bottom: 16px; }
+    /* Results */
+    .result-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #111; border-radius: 6px; margin-bottom: 8px; }
+    .rank { font-size: 1.1rem; font-weight: 700; color: #2563eb; width: 28px; }
+    .task-name { flex: 1; font-size: 0.95rem; }
+    .score { font-size: 0.85rem; color: #888; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Phase 1: Add Tasks -->
+  <div id="phase-add">
+    <div class="header"><h1>Task Prioritizer</h1><span class="version">v1.0.1</span></div>
+    <div class="card">
+      <input type="text" id="task-input" placeholder="Enter a task…" />
+      <div class="row">
+        <button class="btn-primary" onclick="addTask()">Add</button>
+      </div>
+    </div>
+    <ul class="task-list" id="task-list"></ul>
+    <button class="btn-primary" id="start-btn" onclick="startCompare()" style="display:none;width:100%">Start Comparing →</button>
+  </div>
+
+  <!-- Phase 2: Compare -->
+  <div id="phase-compare" class="hidden">
+    <h1>Compare Tasks</h1>
+    <div class="progress" id="progress"></div>
+    <h2 id="criterion-label"></h2>
+    <div class="compare-grid">
+      <button class="compare-btn" id="btn-left" onclick="pick(0)"></button>
+      <button class="compare-btn" id="btn-right" onclick="pick(1)"></button>
+    </div>
+    <button class="btn-ghost" onclick="pickEqual()" style="width:100%;margin-top:-8px">Equal</button>
+  </div>
+
+  <!-- Phase 3: Results -->
+  <div id="phase-results" class="hidden">
+    <h1>Prioritized Tasks</h1>
+    <div id="results-list"></div>
+    <button class="btn-ghost" onclick="restart()" style="margin-top:16px;width:100%">Start Over</button>
+  </div>
+</div>
+
+<script>
+  const CRITERIA = ['Which task has the highest impact?', 'Which task is more urgent?', 'Which task requires less effort?'];
+  const STORAGE_KEY = 'task-prioritizer';
+
+  let tasks = [], pairs = [], scores = {};
+  let pairIdx = 0, phase = 'add';
+
+  const $ = id => document.getElementById(id);
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ tasks, pairs, scores, pairIdx, phase }));
+  }
+
+  function load() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    ({ tasks, pairs, scores, pairIdx, phase } = JSON.parse(raw));
+    if (phase === 'add') { renderTaskList(); }
+    else if (phase === 'compare') { $('phase-add').classList.add('hidden'); $('phase-compare').classList.remove('hidden'); renderCompare(); }
+    else if (phase === 'results') { $('phase-add').classList.add('hidden'); showResults(); }
+  }
+
+  function addTask() {
+    const input = $('task-input');
+    const name = input.value.trim();
+    if (!name) return;
+    tasks.push(name);
+    input.value = '';
+    renderTaskList();
+    save();
+  }
+
+  $('task-input').addEventListener('keydown', e => e.key === 'Enter' && addTask());
+
+  function renderTaskList() {
+    $('task-list').innerHTML = tasks.map((t, i) =>
+      `<li>${t} <span class="del" onclick="removeTask(${i})">✕</span></li>`
+    ).join('');
+    $('start-btn').style.display = tasks.length >= 2 ? 'block' : 'none';
+  }
+
+  function removeTask(i) {
+    tasks.splice(i, 1);
+    renderTaskList();
+    save();
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function buildPairs() {
+    pairs = [];
+    for (let i = 0; i < tasks.length; i++)
+      for (let j = i + 1; j < tasks.length; j++)
+        for (let c = 0; c < CRITERIA.length; c++)
+          pairs.push([i, j, c]);
+    shuffle(pairs);
+  }
+
+  function startCompare() {
+    scores = Object.fromEntries(tasks.map((_, i) => [i, 0]));
+    buildPairs();
+    pairIdx = 0; phase = 'compare';
+    $('phase-add').classList.add('hidden');
+    $('phase-compare').classList.remove('hidden');
+    renderCompare();
+    save();
+  }
+
+  function renderCompare() {
+    $('progress').textContent = `${pairIdx + 1} / ${pairs.length}`;
+    const [a, b, c] = pairs[pairIdx];
+    $('criterion-label').textContent = CRITERIA[c];
+    $('btn-left').textContent = tasks[a];
+    $('btn-right').textContent = tasks[b];
+  }
+
+  function pickEqual() {
+    advance();
+  }
+
+  function pick(side) {
+    const [a, b] = pairs[pairIdx];
+    const winner = side === 0 ? a : b;
+    const loser = side === 0 ? b : a;
+    scores[winner]++;
+    scores[loser]--;
+    advance();
+  }
+
+  function advance() {
+    pairIdx++;
+    if (pairIdx >= pairs.length) return showResults();
+    renderCompare();
+    save();
+  }
+
+  function showResults() {
+    phase = 'results';
+    const ranked = tasks
+      .map((name, i) => ({ name, score: scores[i] }))
+      .sort((a, b) => b.score - a.score);
+
+    $('results-list').innerHTML = ranked.map((t, i) =>
+      `<div class="result-item">
+        <span class="rank">${i + 1}</span>
+        <span class="task-name">${t.name}</span>
+        <span class="score">${t.score} pts</span>
+      </div>`
+    ).join('');
+
+    $('phase-compare').classList.add('hidden');
+    $('phase-results').classList.remove('hidden');
+    save();
+  }
+
+  function restart() {
+    tasks = []; pairs = []; scores = {};
+    pairIdx = 0; phase = 'add';
+    localStorage.removeItem(STORAGE_KEY);
+    renderTaskList();
+    $('phase-results').classList.add('hidden');
+    $('phase-add').classList.remove('hidden');
+  }
+
+  load();
+</script>
+</body>
+</html>
